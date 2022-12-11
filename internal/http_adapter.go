@@ -6,17 +6,17 @@ import (
 	"encoding/base64"
 	"fmt"
 	"github.com/aws/aws-lambda-go/events"
-	"github.com/kataras/iris/v12/httptest"
 	"github.com/rs/zerolog/log"
+	"io"
 	"io/ioutil"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 )
 
 func decodeLambdaBody(body string, out *bytes.Buffer) error {
-	enc := base64.NewEncoder(base64.StdEncoding, out)
-	defer enc.Close()
-	_, err := enc.Write([]byte(body))
+	dec := base64.NewDecoder(base64.StdEncoding, bytes.NewBufferString(body))
+	_, err := io.Copy(out, dec)
 	return err
 }
 
