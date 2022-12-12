@@ -6,9 +6,36 @@ import (
 	"fmt"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/stretchr/testify/assert"
+	"io/ioutil"
 	"net/http"
 	"testing"
 )
+
+func validLambdaRequest() *events.ALBTargetGroupRequest {
+	return &events.ALBTargetGroupRequest{
+		HTTPMethod:                      "POST",
+		Path:                            "/shining",
+		QueryStringParameters:           nil,
+		MultiValueQueryStringParameters: nil,
+		Headers: map[string]string{
+			"Accept":       "application/json;v=1",
+			"Content-Type": "application/json",
+		},
+		MultiValueHeaders: nil,
+		RequestContext:    events.ALBTargetGroupRequestContext{},
+		IsBase64Encoded:   true,
+		Body:              "eyJmb28iOiAiYmFyIn0=",
+	}
+}
+
+func validHttpRequest(t *testing.T) *http.Request {
+	body := `{"foo": "bar"}`
+	req, err := http.NewRequest("POST", "https://localhost/shining", bytes.NewBufferString(body))
+	assert.NoError(t, err)
+	req.Header.Set("Accept", "application/json;v=1")
+	req.Header.Set("Content-Type", "application/json")
+	return req
+}
 
 func Test_decodeLambdaBody(t *testing.T) {
 	type args struct {
@@ -64,20 +91,7 @@ func Test_getRequestBody(t *testing.T) {
 		{
 			name: "not base64 encoded",
 			args: args{
-				r: &events.ALBTargetGroupRequest{
-					HTTPMethod:                      "POST",
-					Path:                            "/shining",
-					QueryStringParameters:           nil,
-					MultiValueQueryStringParameters: nil,
-					Headers: map[string]string{
-						"Accept":       "application/json;v=1",
-						"Content-Type": "application/json",
-					},
-					MultiValueHeaders: nil,
-					RequestContext:    events.ALBTargetGroupRequestContext{},
-					IsBase64Encoded:   false,
-					Body:              `{"foo": "bar"}`,
-				},
+				r: validLambdaRequest(),
 			},
 			want:    bytes.NewBufferString(`{"foo": "bar"}`),
 			wantErr: assert.NoError,
@@ -136,6 +150,9 @@ func Test_getRequestBody(t *testing.T) {
 }
 
 func Test_eventToHttpRequest(t *testing.T) {
+	badRequest := validLambdaRequest()
+	badRequest.Body = "asdkljflksdjf"
+	badRequest.IsBase64Encoded = true
 	type args struct {
 		r events.ALBTargetGroupRequest
 	}
@@ -145,7 +162,17 @@ func Test_eventToHttpRequest(t *testing.T) {
 		want    *http.Request
 		wantErr assert.ErrorAssertionFunc
 	}{
-		// TODO: Add test cases.
+		{
+			name:    "valid request",
+			args:    args{r: *validLambdaRequest()},
+			want:    validHttpRequest(t),
+			wantErr: assert.NoError,
+		},
+		{
+			name:    "bad request - invalid b64 encoding",
+			args:    args{r: *badRequest},
+			wantErr: assert.Error,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -153,7 +180,18 @@ func Test_eventToHttpRequest(t *testing.T) {
 			if !tt.wantErr(t, err, fmt.Sprintf("eventToHttpRequest(%v)", tt.args.r)) {
 				return
 			}
-			assert.Equalf(t, tt.want, got, "eventToHttpRequest(%v)", tt.args.r)
+			if tt.want != nil {
+				defer got.Body.Close()
+				assert.Equal(t, tt.want.Method, got.Method)
+				assert.Equal(t, tt.want.URL, got.URL)
+				gotBody, err := ioutil.ReadAll(got.Body)
+				assert.NoError(t, err)
+				wantBody, err := ioutil.ReadAll(tt.want.Body)
+				assert.NoError(t, err)
+				assert.Equal(t, wantBody, gotBody)
+			}
+
+			//assert.Equalf(t, tt.want, got, "eventToHttpRequest(%v)", tt.args.r)
 		})
 	}
 }
