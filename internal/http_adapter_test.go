@@ -109,6 +109,9 @@ func Test_decodeLambdaBody(t *testing.T) {
 }
 
 func Test_getRequestBody(t *testing.T) {
+	notB64 := validLambdaRequest()
+	notB64.Body = `{"foo": "bar"}`
+	notB64.IsBase64Encoded = false
 	type args struct {
 		r *events.ALBTargetGroupRequest
 	}
@@ -121,7 +124,7 @@ func Test_getRequestBody(t *testing.T) {
 		{
 			name: "not base64 encoded",
 			args: args{
-				r: validLambdaRequest(),
+				r: notB64,
 			},
 			want:    bytes.NewBufferString(`{"foo": "bar"}`),
 			wantErr: assert.NoError,
@@ -183,6 +186,8 @@ func Test_eventToHttpRequest(t *testing.T) {
 	badRequest := validLambdaRequest()
 	badRequest.Body = "asdkljflksdjf"
 	badRequest.IsBase64Encoded = true
+	badRequestUrl := validLambdaRequest()
+	badRequestUrl.Path = "!@#$%^&**(("
 	type args struct {
 		r events.ALBTargetGroupRequest
 	}
@@ -199,8 +204,13 @@ func Test_eventToHttpRequest(t *testing.T) {
 			wantErr: assert.NoError,
 		},
 		{
-			name:    "bad request - invalid b64 encoding",
+			name:    "invalid b64 encoding",
 			args:    args{r: *badRequest},
+			wantErr: assert.Error,
+		},
+		{
+			name:    "invalid request url",
+			args:    args{r: *badRequestUrl},
 			wantErr: assert.Error,
 		},
 	}
