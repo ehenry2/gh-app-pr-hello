@@ -2,6 +2,7 @@ package internal
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -295,6 +296,81 @@ func Test_responseToEvent(t *testing.T) {
 				return
 			}
 			assert.Equalf(t, tt.want, got, "responseToEvent(%v)", tt.args.resp)
+		})
+	}
+}
+
+func TestAlbHandler_ProxyWithContext(t *testing.T) {
+	valid := validLambdaRequest()
+	valid.Path = "/valid"
+	fail500 := validLambdaRequest()
+	fail500.Path = "/fail"
+	invalidB64 := validLambdaRequest()
+	invalidB64.IsBase64Encoded = true
+	invalidB64.Body = "aslkdjflsjdfkdjsfkljsdf"
+	http.Handle("/valid", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"foo": "bar"}`))
+	}))
+	http.Handle("/fail", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(500)
+	}))
+	type args struct {
+		ctx context.Context
+		r   events.ALBTargetGroupRequest
+	}
+	tests := []struct {
+		name    string
+		args    args
+		want    events.ALBTargetGroupResponse
+		wantErr assert.ErrorAssertionFunc
+	}{
+		{
+			name: "valid request",
+			args: args{
+				ctx: context.Background(),
+				r:   *valid,
+			},
+			want: events.ALBTargetGroupResponse{
+				StatusCode:        200,
+				StatusDescription: "200 OK",
+				Headers:           map[string]string{"Content-Type": "application/json"},
+				Body:              `{"foo": "bar"}`,
+			},
+			wantErr: assert.NoError,
+		},
+		{
+			name: "500 error",
+			args: args{
+				ctx: context.Background(),
+				r:   *fail500,
+			},
+			want: events.ALBTargetGroupResponse{
+				StatusCode:        500,
+				StatusDescription: "500 Internal Server Error",
+				Headers:           map[string]string{"Content-Type": "application/json"},
+				Body:              "",
+			},
+			wantErr: assert.NoError,
+		},
+		{
+			name: "decoding error",
+			args: args{
+				ctx: context.Background(),
+				r:   *invalidB64,
+			},
+			wantErr: assert.Error,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := &AlbHandler{}
+			got, err := h.ProxyWithContext(tt.args.ctx, tt.args.r)
+			if !tt.wantErr(t, err, fmt.Sprintf("ProxyWithContext(%v, %v)", tt.args.ctx, tt.args.r)) {
+				return
+			}
+			assert.Equalf(t, tt.want, got, "ProxyWithContext(%v, %v)", tt.args.ctx, tt.args.r)
 		})
 	}
 }
