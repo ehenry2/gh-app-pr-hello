@@ -3,6 +3,7 @@ package internal
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/stretchr/testify/assert"
@@ -10,6 +11,12 @@ import (
 	"net/http"
 	"testing"
 )
+
+type failReader struct{}
+
+func (failReader) Read(p []byte) (n int, err error) {
+	return 0, errors.New("simulated error")
+}
 
 func validLambdaRequest() *events.ALBTargetGroupRequest {
 	return &events.ALBTargetGroupRequest{
@@ -35,6 +42,29 @@ func validHttpRequest(t *testing.T) *http.Request {
 	req.Header.Set("Accept", "application/json;v=1")
 	req.Header.Set("Content-Type", "application/json")
 	return req
+}
+
+func validHTTPResponse() *http.Response {
+	body := `{"foo": "bar"}`
+	headers := http.Header{
+		"Content-Type": []string{"application/json"},
+	}
+	return &http.Response{
+		Status:           "200 OK",
+		StatusCode:       200,
+		Proto:            "HTTP/1.1",
+		ProtoMajor:       1,
+		ProtoMinor:       1,
+		Header:           headers,
+		Body:             ioutil.NopCloser(bytes.NewBufferString(body)),
+		ContentLength:    int64(len(body)),
+		TransferEncoding: nil,
+		Close:            false,
+		Uncompressed:     false,
+		Trailer:          nil,
+		Request:          nil,
+		TLS:              nil,
+	}
 }
 
 func Test_decodeLambdaBody(t *testing.T) {
@@ -192,6 +222,69 @@ func Test_eventToHttpRequest(t *testing.T) {
 			}
 
 			//assert.Equalf(t, tt.want, got, "eventToHttpRequest(%v)", tt.args.r)
+		})
+	}
+}
+
+func Test_responseToEvent(t *testing.T) {
+	errHttpResp := validHTTPResponse()
+	errHttpResp.Body = ioutil.NopCloser(failReader{})
+	respMultiHeader := validHTTPResponse()
+	respMultiHeader.Header = map[string][]string{
+		"X-Foo-Bar": []string{"foo", "bar"},
+	}
+	type args struct {
+		resp *http.Response
+	}
+	tests := []struct {
+		name    string
+		args    args
+		want    events.ALBTargetGroupResponse
+		wantErr assert.ErrorAssertionFunc
+	}{
+		{
+			name: "valid response",
+			args: args{resp: validHTTPResponse()},
+			want: events.ALBTargetGroupResponse{
+				StatusCode:        200,
+				StatusDescription: "200 OK",
+				Headers: map[string]string{
+					"Content-Type": "application/json",
+				},
+				MultiValueHeaders: nil,
+				Body:              `{"foo": "bar"}`,
+				IsBase64Encoded:   false,
+			},
+			wantErr: assert.NoError,
+		},
+		{
+			name: "multiheader",
+			args: args{resp: respMultiHeader},
+			want: events.ALBTargetGroupResponse{
+				StatusCode:        200,
+				StatusDescription: "200 OK",
+				Headers: map[string]string{
+					"X-Foo-Bar": "foo,bar",
+				},
+				MultiValueHeaders: nil,
+				Body:              `{"foo": "bar"}`,
+				IsBase64Encoded:   false,
+			},
+			wantErr: assert.NoError,
+		},
+		{
+			name:    "response reading error",
+			args:    args{resp: errHttpResp},
+			wantErr: assert.Error,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := responseToEvent(tt.args.resp)
+			if !tt.wantErr(t, err, fmt.Sprintf("responseToEvent(%v)", tt.args.resp)) {
+				return
+			}
+			assert.Equalf(t, tt.want, got, "responseToEvent(%v)", tt.args.resp)
 		})
 	}
 }
