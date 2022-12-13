@@ -3,6 +3,7 @@ package internal
 import (
 	"context"
 	"encoding/json"
+	"github.com/ehenry2/gh-app-pr-hello/business"
 	"github.com/google/go-github/v47/github"
 	"github.com/palantir/go-githubapp/githubapp"
 	"github.com/rs/zerolog/log"
@@ -15,6 +16,8 @@ const (
 
 type PRHandler struct {
 	ClientCreator githubapp.ClientCreator
+	OpenHandler   *business.PROpenHandler
+	CloseHandler  *business.PRCloseHandler
 }
 
 func (h *PRHandler) Handles() []string {
@@ -31,32 +34,21 @@ func (h *PRHandler) Handle(ctx context.Context, eventType, deliveryID string, pa
 		return err
 	}
 
-	msg := ""
-	switch *event.Action {
-	case OpenedAction:
-		msg = "creating a new site: url is: https://example.com/random1234"
-	case ClosedAction:
-		msg = "cleaning up resources..."
-	}
-	installationID := githubapp.GetInstallationIDFromEvent(&event)
-	repo := event.GetRepo()
-	repoName := repo.GetName()
-	prNum := event.GetNumber()
-	repoOwner := repo.GetOwner().GetLogin()
-	comment := &github.IssueComment{
-		Body: &msg,
-	}
-
 	// create github api client to use in posting the comment.
+	installationID := githubapp.GetInstallationIDFromEvent(&event)
 	client, err := h.ClientCreator.NewInstallationClient(installationID)
 	if err != nil {
 		log.Err(err).Msg("failed to create installation client")
 		return err
 	}
-	
-	_, _, err = client.Issues.CreateComment(ctx, repoOwner, repoName, prNum, comment)
-	if err != nil {
-		log.Err(err).Msg("failed to create comment")
+
+	// handle the event.
+	switch *event.Action {
+	case OpenedAction:
+		return h.OpenHandler.Handle(ctx, client, event)
+	case ClosedAction:
+		return h.CloseHandler.Handle(ctx, client, event)
 	}
+
 	return err
 }
